@@ -92,6 +92,22 @@ class PasswordTest extends TestCase
         $this->assertEquals($password, Password::sha512crypt('password', Password::getSalt($password)));
     }
 
+    public function test_argon2i()
+    {
+        $password = Password::argon2i('password');
+
+        $this->assertStringStartsWith('{ARGON2I}$argon2i$', $password);
+        $this->assertNotEquals($password, Password::argon2i('password'));
+    }
+
+    public function test_argon2id()
+    {
+        $password = Password::argon2id('password');
+
+        $this->assertStringStartsWith('{ARGON2ID}$argon2id$', $password);
+        $this->assertNotEquals($password, Password::argon2id('password'));
+    }
+
     // Unsalted Hash Tests. //
 
     public function test_sha()

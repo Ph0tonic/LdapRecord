@@ -103,6 +103,22 @@ class Password
     }
 
     /**
+     * Make an argon2i password.
+     */
+    public static function argon2i(string $password): string
+    {
+        return '{ARGON2I}'.password_hash($password, PASSWORD_ARGON2I);
+    }
+
+    /**
+     * Make an argon2id password.
+     */
+    public static function argon2id(string $password): string
+    {
+        return '{ARGON2ID}'.password_hash($password, PASSWORD_ARGON2ID);
+    }
+
+    /**
      * Make a non-salted NThash password.
      */
     public static function nthash(string $password): string

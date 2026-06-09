@@ -4,6 +4,7 @@ namespace LdapRecord\Tests\Unit\Models\OpenLDAP;
 
 use LdapRecord\Connection;
 use LdapRecord\Container;
+use LdapRecord\LdapRecordException;
 use LdapRecord\Models\Attributes\Password;
 use LdapRecord\Models\OpenLDAP\User;
 use LdapRecord\Tests\TestCase;
@@ -73,6 +74,20 @@ class UserTest extends TestCase
 
         [, $newAlgo] = Password::getHashMethodAndAlgo($new['values'][0]);
         $this->assertEquals(Password::CRYPT_SALT_TYPE_SHA512, $newAlgo);
+    }
+
+    public function test_changing_argon2_password_throws_exception()
+    {
+        $this->expectException(LdapRecordException::class);
+        $this->expectExceptionMessage('Argon2 passwords cannot be changed using this method.');
+
+        $user = (new OpenLDAPUserTestStub)->setRawAttributes([
+            'userpassword' => [
+                Password::argon2id('secret'),
+            ],
+        ]);
+
+        $user->password = ['secret', 'new-secret'];
     }
 
     public function test_correct_auth_identifier_is_returned()

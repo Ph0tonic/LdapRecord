@@ -29,6 +29,12 @@ trait HasPassword
         // If the password given is an array, we can assume we
         // are changing the password for the current user.
         if (is_array($password)) {
+            if (in_array(strtolower($method), ['argon2i', 'argon2id'])) {
+                throw new LdapRecordException(
+                    "Argon2 passwords cannot be changed using this method. Use the LDAP Password Modify extended operation instead."
+                );
+            }
+
             $this->setChangedPassword(
                 $this->getHashedPassword($method, $password[0], $this->getPasswordSalt($method)),
                 $this->getHashedPassword($method, $password[1]),

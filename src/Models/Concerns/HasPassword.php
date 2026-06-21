@@ -2,6 +2,7 @@
 
 namespace LdapRecord\Models\Concerns;
 
+use Closure;
 use LdapRecord\ConnectionException;
 use LdapRecord\LdapRecordException;
 use LdapRecord\Models\Attributes\Password;
@@ -10,6 +11,11 @@ use LdapRecord\Models\Model;
 /** @mixin Model */
 trait HasPassword
 {
+    /**
+     * A password change deferred until the model is saved.
+     */
+    protected ?Closure $pendingPasswordChange = null;
+
     /**
      * Set the password on the user.
      *
@@ -29,15 +35,23 @@ trait HasPassword
         // If the password given is an array, we can assume we
         // are changing the password for the current user.
         if (is_array($password)) {
-            if (in_array(strtolower($method), ['argon2i', 'argon2id'])) {
-                throw new LdapRecordException(
-                    "Argon2 passwords cannot be changed using this method. Use the LDAP Password Modify extended operation instead."
+            [$oldPassword, $newPassword] = $password;
+
+            // Argon2 hashes embed a random salt, so the currently stored hash
+            // cannot be reproduced to emit a REMOVE/ADD batch modification.
+            // Instead we defer a self-service RFC 3062 Password Modify
+            // extended operation until the model is saved.
+            if ($this->passwordChangeRequiresExop($method)) {
+                $this->pendingPasswordChange = fn () => $this->getConnection()->changePassword(
+                    $this->getDn(), $oldPassword, $newPassword
                 );
+
+                return;
             }
 
             $this->setChangedPassword(
-                $this->getHashedPassword($method, $password[0], $this->getPasswordSalt($method)),
-                $this->getHashedPassword($method, $password[1]),
+                $this->getHashedPassword($method, $oldPassword, $this->getPasswordSalt($method)),
+                $this->getHashedPassword($method, $newPassword),
                 $this->getPasswordAttributeName()
             );
         }
@@ -123,6 +137,54 @@ trait HasPassword
                 [$newPassword]
             )
         );
+    }
+
+    /**
+     * Determine if changing a password hashed with the given method requires
+     * an extended operation rather than a batch modification.
+     */
+    protected function passwordChangeRequiresExop(string $method): bool
+    {
+        return match (strtolower($method)) {
+            'argon2i', 'argon2id' => true,
+            default => false,
+        };
+    }
+
+    /**
+     * Determine if the model has a password change deferred until save.
+     */
+    public function hasPendingPasswordChange(): bool
+    {
+        return ! is_null($this->pendingPasswordChange);
+    }
+
+    /**
+     * Flush any password change deferred until save.
+     *
+     * @throws LdapRecordException
+     */
+    public function flushPendingPasswordChange(): void
+    {
+        if (! $change = $this->pendingPasswordChange) {
+            return;
+        }
+
+        // Clear the pending change before executing it so a failed operation
+        // cannot be re-applied if the save is retried.
+        $this->pendingPasswordChange = null;
+
+        $change();
+    }
+
+    /**
+     * Perform any operations deferred until the model is saved.
+     *
+     * @throws LdapRecordException
+     */
+    protected function performDeferredOperations(): void
+    {
+        $this->flushPendingPasswordChange();
     }
 
     /**

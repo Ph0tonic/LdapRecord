@@ -955,12 +955,24 @@ abstract class Model implements Arrayable, ArrayAccess, JsonSerializable, String
 
         $this->exists ? $this->performUpdate() : $this->performInsert();
 
+        // Some changes (such as argon2 password changes) cannot be expressed as
+        // batch modifications and are deferred until the model is saved. These
+        // run unconditionally here, even when no batch modifications exist.
+        $this->performDeferredOperations();
+
         $this->dispatch('saved');
 
         $this->modifications = [];
 
         $this->in = null;
     }
+
+    /**
+     * Perform any operations deferred until the model is saved.
+     *
+     * @throws LdapRecordException
+     */
+    protected function performDeferredOperations(): void {}
 
     /**
      * Inserts the model into the directory.

@@ -7,6 +7,8 @@ use LdapRecord\Container;
 use LdapRecord\LdapRecordException;
 use LdapRecord\Models\Attributes\Password;
 use LdapRecord\Models\OpenLDAP\User;
+use LdapRecord\Testing\DirectoryFake;
+use LdapRecord\Testing\LdapFake;
 use LdapRecord\Tests\TestCase;
 
 class UserTest extends TestCase
@@ -76,18 +78,96 @@ class UserTest extends TestCase
         $this->assertEquals(Password::CRYPT_SALT_TYPE_SHA512, $newAlgo);
     }
 
-    public function test_changing_argon2_password_throws_exception()
+    public function test_changing_argon2_password_defers_a_pending_change_instead_of_queuing_modifications()
     {
-        $this->expectException(LdapRecordException::class);
-        $this->expectExceptionMessage('Argon2 passwords cannot be changed using this method.');
-
         $user = (new OpenLDAPUserTestStub)->setRawAttributes([
+            'dn' => ['cn=jdoe,dc=local,dc=com'],
             'userpassword' => [
                 Password::argon2id('secret'),
             ],
         ]);
 
         $user->password = ['secret', 'new-secret'];
+
+        // The change is performed via an extended operation on save, so no
+        // batch modifications are queued for it.
+        $this->assertEmpty($user->getModifications());
+        $this->assertTrue($user->hasPendingPasswordChange());
+    }
+
+    public function test_resetting_argon2_password_still_queues_a_single_replace_modification()
+    {
+        $user = (new OpenLDAPUserTestStub)->setRawAttributes([
+            'dn' => ['cn=jdoe,dc=local,dc=com'],
+            'userpassword' => [
+                Password::argon2id('secret'),
+            ],
+        ]);
+
+        $user->password = 'new-secret';
+
+        $modifications = $user->getModifications();
+
+        $this->assertFalse($user->hasPendingPasswordChange());
+        $this->assertCount(1, $modifications);
+        $this->assertEquals(LDAP_MODIFY_BATCH_REPLACE, $modifications[0]['modtype']);
+        $this->assertEquals('ARGON2ID', Password::getHashMethod($modifications[0]['values'][0]));
+    }
+
+    public function test_changing_argon2_password_performs_a_self_service_exop_on_save()
+    {
+        $ldap = DirectoryFake::setup()->getLdapConnection();
+
+        $ldap->expect([
+            LdapFake::operation('bind')->once()
+                ->with('cn=jdoe,dc=local,dc=com', 'secret')
+                ->andReturnResponse(),
+
+            LdapFake::operation('exopPasswd')->once()
+                ->with('cn=jdoe,dc=local,dc=com', 'secret', 'new-secret')
+                ->andReturnTrue(),
+        ]);
+
+        $user = (new OpenLDAPUserTestStub)->setRawAttributes([
+            'dn' => ['cn=jdoe,dc=local,dc=com'],
+            'userpassword' => [
+                Password::argon2id('secret'),
+            ],
+        ]);
+
+        $user->password = ['secret', 'new-secret'];
+
+        $user->save();
+
+        $this->assertFalse($user->hasPendingPasswordChange());
+
+        // Guards against the change being silently skipped because no batch
+        // modifications exist (the early return in Model::performUpdate).
+        $ldap->assertMinimumExpectationCounts();
+    }
+
+    public function test_changing_argon2_password_throws_when_current_password_is_rejected()
+    {
+        $ldap = DirectoryFake::setup()->getLdapConnection();
+
+        $ldap->expect([
+            LdapFake::operation('bind')->once()
+                ->with('cn=jdoe,dc=local,dc=com', 'wrong-secret')
+                ->andReturnResponse(49),
+        ]);
+
+        $user = (new OpenLDAPUserTestStub)->setRawAttributes([
+            'dn' => ['cn=jdoe,dc=local,dc=com'],
+            'userpassword' => [
+                Password::argon2id('secret'),
+            ],
+        ]);
+
+        $user->password = ['wrong-secret', 'new-secret'];
+
+        $this->expectException(LdapRecordException::class);
+
+        $user->save();
     }
 
     public function test_correct_auth_identifier_is_returned()

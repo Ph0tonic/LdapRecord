@@ -34,6 +34,18 @@ class ConnectionFake extends Connection
     }
 
     /**
+     * Clone the connection, reusing the same fake LDAP connection.
+     *
+     * Sharing the underlying fake allows operations performed on an isolated
+     * connection (e.g. self-service password changes) to be asserted through
+     * the original fake's expectations.
+     */
+    public function replicate(): static
+    {
+        return new static($this->configuration, $this->ldap);
+    }
+
+    /**
      * Set the user to authenticate as.
      */
     public function actingAs(Model|string $user): static
